@@ -1,3 +1,30 @@
+CREATE TABLE games (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    status ENUM('in_progress', 'completed') DEFAULT 'in_progress',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    dob DATE
+);
+
+CREATE TABLE game_points (
+    game_id INT,
+    user_id INT,
+    round INT DEFAULT 1,
+    points INT DEFAULT 0,
+    PRIMARY KEY (game_id, user_id, round),
+    FOREIGN KEY (game_id) REFERENCES games(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+
+
 rummy-app/
 ├── backend/
 │   ├── config/
