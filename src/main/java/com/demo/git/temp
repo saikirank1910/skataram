@@ -1,3 +1,29 @@
+# Use the official PHP image with Apache
+FROM php:8.0-apache
+
+# Install required extensions and dependencies
+RUN apt-get update && apt-get install -y \
+    libzip-dev \
+    unzip \
+    && docker-php-ext-install pdo pdo_mysql
+
+# Enable Apache rewrite module
+RUN a2enmod rewrite
+
+# Copy the PHP application files to the Docker container
+COPY ./backend /var/www/html
+
+# Set the working directory
+WORKDIR /var/www/html
+
+# Set proper permissions for the application
+RUN chown -R www-data:www-data /var/www/html
+
+# Expose port 80
+EXPOSE 80
+
+
+
 CREATE TABLE games (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
