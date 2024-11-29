@@ -3,31 +3,28 @@ SELECT
     u.id AS user_id,
     CONCAT(u.first_name, ' ', u.last_name) AS username,
     
-    -- Number of games played by the user (distinct game_id for the user)
-    COUNT(DISTINCT gp.game_id) AS games_played,
-    
-    -- Winning percentage in games (games the user won / total games played)
-    ROUND(
-        (COUNT(DISTINCT CASE WHEN gp.points = ( 
-            SELECT MAX(gp2.points) 
-            FROM game_points gp2 
-            WHERE gp2.game_id = gp.game_id
-        ) THEN gp.game_id END) / 
-         COUNT(DISTINCT gp.game_id)) * 100, 2) AS game_win_percentage,
-    
-    -- Number of rounds played by the user
-    COUNT(gp.round) AS rounds_played,
-    
-    -- Winning percentage in rounds (rounds the user won / total rounds played)
-    ROUND(
-        (SUM(CASE WHEN gp.points = (
-            SELECT MAX(gp2.points)
+    -- Count the number of games the user has won (game where user's total points are the lowest)
+    COUNT(DISTINCT CASE 
+        WHEN (
+            SELECT SUM(gp2.points)
             FROM game_points gp2
+            WHERE gp2.game_id = gp.game_id
+            GROUP BY gp2.game_id
+        ) = (
+            SELECT MIN(gp2.points) 
+            FROM game_points gp2
+            WHERE gp2.game_id = gp.game_id
+        ) THEN gp.game_id END) AS games_won,
+    
+    -- Count the number of rounds the user has won (round where user's points are the lowest)
+    COUNT(DISTINCT CASE 
+        WHEN gp.points = (
+            SELECT MIN(gp2.points) 
+            FROM game_points gp2 
             WHERE gp2.game_id = gp.game_id 
             AND gp2.round = gp.round
-        ) THEN 1 ELSE 0 END) / 
-         COUNT(gp.round)) * 100, 2) AS round_win_percentage
-
+        ) THEN gp.round END) AS rounds_won
+    
 FROM 
     users u
 JOIN 
@@ -39,8 +36,7 @@ WHERE
 GROUP BY 
     u.id, u.first_name, u.last_name
 ORDER BY 
-    u.id
-LIMIT 10 OFFSET 0;  -- Change these values to paginate
+    u.id;
 
 # Use the official PHP image with Apache
 FROM php:8.0-apache
