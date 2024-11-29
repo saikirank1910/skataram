@@ -1,3 +1,47 @@
+
+SELECT 
+    u.id AS user_id,
+    CONCAT(u.first_name, ' ', u.last_name) AS username,
+    
+    -- Number of games played by the user (distinct game_id for the user)
+    COUNT(DISTINCT gp.game_id) AS games_played,
+    
+    -- Winning percentage in games (games the user won / total games played)
+    ROUND(
+        (COUNT(DISTINCT CASE WHEN gp.points = ( 
+            SELECT MAX(gp2.points) 
+            FROM game_points gp2 
+            WHERE gp2.game_id = gp.game_id
+        ) THEN gp.game_id END) / 
+         COUNT(DISTINCT gp.game_id)) * 100, 2) AS game_win_percentage,
+    
+    -- Number of rounds played by the user
+    COUNT(gp.round) AS rounds_played,
+    
+    -- Winning percentage in rounds (rounds the user won / total rounds played)
+    ROUND(
+        (SUM(CASE WHEN gp.points = (
+            SELECT MAX(gp2.points)
+            FROM game_points gp2
+            WHERE gp2.game_id = gp.game_id 
+            AND gp2.round = gp.round
+        ) THEN 1 ELSE 0 END) / 
+         COUNT(gp.round)) * 100, 2) AS round_win_percentage
+
+FROM 
+    users u
+JOIN 
+    game_points gp ON u.id = gp.user_id
+JOIN
+    games g ON gp.game_id = g.id
+WHERE 
+    g.status = 'completed'  -- Only consider completed games
+GROUP BY 
+    u.id, u.first_name, u.last_name
+ORDER BY 
+    u.id
+LIMIT 10 OFFSET 0;  -- Change these values to paginate
+
 # Use the official PHP image with Apache
 FROM php:8.0-apache
 
