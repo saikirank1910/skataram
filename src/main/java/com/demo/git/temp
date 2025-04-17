@@ -1,0 +1,571 @@
+
+SELECT 
+    u.id AS user_id,
+    CONCAT(u.first_name, ' ', u.last_name) AS username,
+    
+    -- Count the number of games the user has won (game where user's total points are the lowest)
+    COUNT(DISTINCT CASE 
+        WHEN (
+            SELECT SUM(gp2.points)
+            FROM game_points gp2
+            WHERE gp2.game_id = gp.game_id
+            GROUP BY gp2.game_id
+        ) = (
+            SELECT MIN(gp2.points) 
+            FROM game_points gp2
+            WHERE gp2.game_id = gp.game_id
+        ) THEN gp.game_id END) AS games_won,
+    
+    -- Count the number of rounds the user has won (round where user's points are the lowest)
+    COUNT(DISTINCT CASE 
+        WHEN gp.points = (
+            SELECT MIN(gp2.points) 
+            FROM game_points gp2 
+            WHERE gp2.game_id = gp.game_id 
+            AND gp2.round = gp.round
+        ) THEN gp.round END) AS rounds_won
+    
+FROM 
+    users u
+JOIN 
+    game_points gp ON u.id = gp.user_id
+JOIN
+    games g ON gp.game_id = g.id
+WHERE 
+    g.status = 'completed'  -- Only consider completed games
+GROUP BY 
+    u.id, u.first_name, u.last_name
+ORDER BY 
+    u.id;
+
+# Use the official PHP image with Apache
+FROM php:8.0-apache
+
+# Install required extensions and dependencies
+RUN apt-get update && apt-get install -y \
+    libzip-dev \
+    unzip \
+    && docker-php-ext-install pdo pdo_mysql
+
+# Enable Apache rewrite module
+RUN a2enmod rewrite
+
+# Copy the PHP application files to the Docker container
+COPY ./backend /var/www/html
+
+# Set the working directory
+WORKDIR /var/www/html
+
+# Set proper permissions for the application
+RUN chown -R www-data:www-data /var/www/html
+
+# Expose port 80
+EXPOSE 80
+
+
+
+CREATE TABLE games (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    status ENUM('in_progress', 'completed') DEFAULT 'in_progress',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    dob DATE
+);
+
+CREATE TABLE game_points (
+    game_id INT,
+    user_id INT,
+    round INT DEFAULT 1,
+    points INT DEFAULT 0,
+    PRIMARY KEY (game_id, user_id, round),
+    FOREIGN KEY (game_id) REFERENCES games(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+
+
+rummy-app/
+├── backend/
+│   ├── config/
+│   │   └── Database.php
+│   ├── models/
+│   │   ├── Game.php
+│   │   └── User.php
+│   ├── controllers/
+│   │   ├── GameController.php
+│   │   └── UserController.php
+│   └── index.php
+├── frontend/
+│   ├── index.html
+│   ├── game.html
+│   ├── js/
+│   │   ├── main.js
+│   │   └── game.js
+├── docker-compose.yml
+└── Dockerfile
+
+
+
+
+------------ docker-compose
+version: '3.8'
+
+services:
+  php-apache:
+    build: .
+    ports:
+      - "8080:80"
+    volumes:
+      - ./backend:/var/www/html
+      - ./frontend:/var/www/html/frontend
+    environment:
+      - DB_HOST=db
+      - DB_NAME=rummy
+      - DB_USER=root
+      - DB_PASSWORD=example
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: rummy
+      MYSQL_ROOT_PASSWORD: example
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:
+
+----- DockerFile
+
+FROM php:8.1-apache
+
+RUN docker-php-ext-install mysqli pdo pdo_mysql
+
+COPY backend/ /var/www/html/
+WORKDIR /var/www/html
+RUN chown -R www-data:www-data /var/www/html
+
+--------DataBase.php
+
+<?php
+class Database {
+    private $host;
+    private $db_name;
+    private $username;
+    private $password;
+    public $conn;
+
+    public function __construct() {
+        $this->host = getenv('DB_HOST') ?: 'localhost';
+        $this->db_name = getenv('DB_NAME') ?: 'sys';
+        $this->username = getenv('DB_USER') ?: 'root';
+        $this->password = getenv('DB_PASSWORD') ?: '';
+    }
+
+    public function getConnection() {
+        $this->conn = null;
+        try {
+            $this->conn = new PDO("mysql:host={$this->host};dbname={$this->db_name}", $this->username, $this->password);
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch (PDOException $exception) {
+            echo "Connection error: " . $exception->getMessage();
+        }
+        return $this->conn;
+    }
+}
+?>
+
+
+----------Game.php
+<?php
+class Game {
+    private $conn;
+    private $table = 'games';
+
+    public function __construct($db) {
+        $this->conn = $db;
+    }
+
+    public function createGameWithUsers($gameName, $users) {
+        try {
+            $this->conn->beginTransaction();
+
+            // Insert new game
+            $query = "INSERT INTO {$this->table} (name) VALUES (:name)";
+            $stmt = $this->conn->prepare($query);
+            $stmt->bindParam(':name', $gameName);
+            $stmt->execute();
+            $gameId = $this->conn->lastInsertId();
+
+            // Insert each user and link to the game
+            foreach ($users as $user) {
+                // Check if user already exists by email
+                $query = "SELECT id FROM users WHERE email = :email";
+                $stmt = $this->conn->prepare($query);
+                $stmt->bindParam(':email', $user->email);
+                $stmt->execute();
+                $userId = $stmt->fetchColumn();
+
+                // If user doesn't exist, create new
+                if (!$userId) {
+                    $query = "INSERT INTO users (first_name, last_name, email, dob) VALUES (:firstName, :lastName, :email, :dob)";
+                    $stmt = $this->conn->prepare($query);
+                    $stmt->bindParam(':firstName', $user->firstName);
+                    $stmt->bindParam(':lastName', $user->lastName);
+                    $stmt->bindParam(':email', $user->email);
+                    $stmt->bindParam(':dob', $user->dob);
+                    $stmt->execute();
+                    $userId = $this->conn->lastInsertId();
+                }
+
+                // Link user to the game
+                $query = "INSERT INTO game_users (game_id, user_id) VALUES (:gameId, :userId)";
+                $stmt = $this->conn->prepare($query);
+                $stmt->bindParam(':gameId', $gameId);
+                $stmt->bindParam(':userId', $userId);
+                $stmt->execute();
+            }
+
+            $this->conn->commit();
+            return true;
+
+        } catch (Exception $e) {
+            $this->conn->rollBack();
+            throw $e;
+        }
+    }
+
+    public function getAllGames() {
+        $query = "SELECT * FROM {$this->table}";
+        $stmt = $this->conn->prepare($query);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+?>
+
+
+---------- GameController.php
+
+<?php
+require_once '../config/Database.php';
+require_once '../models/Game.php';
+
+class GameController {
+    private $db;
+    private $game;
+
+    public function __construct() {
+        $database = new Database();
+        $this->db = $database->getConnection();
+        $this->game = new Game($this->db);
+    }
+
+    public function createGameWithUsers($gameName, $users) {
+        return $this->game->createGameWithUsers($gameName, $users);
+    }
+
+    public function getAllGames() {
+        return $this->game->getAllGames();
+    }
+}
+
+$controller = new GameController();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_GET['route'] === 'create_game_with_users') {
+    $data = json_decode(file_get_contents("php://input"));
+    $controller->createGameWithUsers($data->gameName, $data->users);
+    echo json_encode(['status' => 'success']);
+} elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && $_GET['route'] === 'games') {
+    echo json_encode($controller->getAllGames());
+}
+?>
+
+------------ index.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rummy Game Manager</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="js/main.js"></script>
+</head>
+<body>
+  <h1>Rummy Games</h1>
+  <div id="gameList"></div>
+  
+  <h2>Create New Game</h2>
+  <form id="createGameForm">
+    <label for="gameName">Game Name:</label>
+    <input type="text" id="gameName" name="gameName" required><br><br>
+
+    <h3>Users</h3>
+    <div id="usersList">
+      <div class="user">
+        <input type="text" name="firstName" placeholder="First Name" required>
+        <input type="text" name="lastName" placeholder="Last Name" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="date" name="dob" placeholder="DOB" required>
+      </div>
+    </div>
+    <button type="button" id="addUserBtn">Add Another User</button><br><br>
+
+    <button type="submit">Create Game</button>
+  </form>
+</body>
+</html>
+
+----------
+
+$(document).ready(function() {
+  function fetchGames() {
+    $.ajax({
+      url: '/backend/index.php?route=games',
+      method: 'GET',
+      success: function(data) {
+        let games = JSON.parse(data);
+        let gameList = '';
+        games.forEach(game => {
+          gameList += `<div><a href="game.html?id=${game.id}">${game.name}</a></div>`;
+        });
+        $('#gameList').html(gameList);
+      }
+    });
+  }
+
+  // Fetch existing games when page loads
+  fetchGames();
+
+  // Add new user fields
+  $('#addUserBtn').click(function() {
+    $('#usersList').append(`
+      <div class="user">
+        <input type="text" name="firstName" placeholder="First Name" required>
+        <input type="text" name="lastName" placeholder="Last Name" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="date" name="dob" placeholder="DOB" required>
+      </div>
+    `);
+  });
+
+  // Handle form submission to create a game with users
+  $('#createGameForm').submit(function(event) {
+    event.preventDefault();
+
+    const gameName = $('#gameName').val();
+    const users = [];
+
+    // Gather all user data
+    $('#usersList .user').each(function() {
+      const user = {
+        firstName: $(this).find('input[name="firstName"]').val(),
+        lastName: $(this).find('input[name="lastName"]').val(),
+        email: $(this).find('input[name="email"]').val(),
+        dob: $(this).find('input[name="dob"]').val()
+      };
+      users.push(user);
+    });
+
+    // Make API call with game name and users array
+    $.ajax({
+      url: '/backend/index.php?route=create_game_with_users',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({ gameName: gameName, users: users }),
+      success: function(response) {
+        alert('Game created successfully!');
+        fetchGames(); // Refresh games list
+      },
+      error: function() {
+        alert('Failed to create game.');
+      }
+    });
+  });
+});
+
+
+-------- game.js
+$(document).ready(function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const gameId = urlParams.get('id');
+
+  function fetchGameProgress() {
+    // Placeholder function for game progress tracking.
+    $('#gameProgress').html(`Game ID: ${gameId}`);
+  }
+
+  $('#endGameBtn').click(function() {
+    // End game logic (to be implemented)
+    alert('Game ended.');
+  });
+
+  fetchGameProgress();
+});
+
+---------game.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Game Progress</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="js/game.js"></script>
+</head>
+<body>
+  <h1>Game Progress</h1>
+  <div id="gameProgress"></div>
+  <button id="endGameBtn">End Game</button>
+</body>
+</html>
+
+--------index.php
+<?php
+require_once 'controllers/GameController.php';
+?>
+-----index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rummy Game Manager</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="js/main.js"></script>
+</head>
+<body>
+  <h1>Rummy Games</h1>
+  <div id="gameList"></div>
+  <button id="newGameBtn">Create New Game</button>
+</body>
+</html>
+
+--------user.php
+<?php
+class User {
+    private $conn;
+    private $table = 'users';
+
+    public function __construct($db) {
+        $this->conn = $db;
+    }
+
+    // Method to create a new user
+    public function createUser($firstName, $lastName, $email, $dob) {
+        $query = "INSERT INTO {$this->table} (first_name, last_name, email, dob) VALUES (:first_name, :last_name, :email, :dob)";
+        $stmt = $this->conn->prepare($query);
+
+        // Bind parameters
+        $stmt->bindParam(':first_name', $firstName);
+        $stmt->bindParam(':last_name', $lastName);
+        $stmt->bindParam(':email', $email);
+        $stmt->bindParam(':dob', $dob);
+
+        // Execute query
+        return $stmt->execute();
+    }
+
+    // Method to get a user by email
+    public function getUserByEmail($email) {
+        $query = "SELECT * FROM {$this->table} WHERE email = :email";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':email', $email);
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    // Method to get user by ID
+    public function getUserById($id) {
+        $query = "SELECT * FROM {$this->table} WHERE id = :id";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':id', $id);
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    // Method to get all users associated with a game
+    public function getUsersByGameId($gameId) {
+        $query = "SELECT u.* FROM {$this->table} u
+                  JOIN game_users gu ON u.id = gu.user_id
+                  WHERE gu.game_id = :game_id";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':game_id', $gameId);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+?>
+----user controller
+
+<?php
+require_once '../config/Database.php';
+require_once '../models/User.php';
+
+class UserController {
+    private $db;
+    private $user;
+
+    public function __construct() {
+        $database = new Database();
+        $this->db = $database->getConnection();
+        $this->user = new User($this->db);
+    }
+
+    // Create a new user
+    public function createUser($firstName, $lastName, $email, $dob) {
+        if ($this->user->createUser($firstName, $lastName, $email, $dob)) {
+            return ['status' => 'success', 'message' => 'User created successfully'];
+        } else {
+            return ['status' => 'error', 'message' => 'Failed to create user'];
+        }
+    }
+
+    // Get user by email
+    public function getUserByEmail($email) {
+        return $this->user->getUserByEmail($email);
+    }
+
+    // Get user by ID
+    public function getUserById($id) {
+        return $this->user->getUserById($id);
+    }
+
+    // Get all users for a specific game
+    public function getUsersByGameId($gameId) {
+        return $this->user->getUsersByGameId($gameId);
+    }
+}
+
+// Instantiate controller
+$controller = new UserController();
+
+// Route for creating a new user
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_GET['route'] === 'create_user') {
+    $data = json_decode(file_get_contents("php://input"));
+    $response = $controller->createUser($data->firstName, $data->lastName, $data->email, $data->dob);
+    echo json_encode($response);
+}
+
+// Route for retrieving a user by email
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_GET['route'] === 'get_user_by_email') {
+    $email = $_GET['email'];
+    echo json_encode($controller->getUserByEmail($email));
+}
+
+// Route for retrieving users by game ID
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_GET['route'] === 'get_users_by_game') {
+    $gameId = $_GET['game_id'];
+    echo json_encode($controller->getUsersByGameId($gameId));
+}
+?>
+
+
+
